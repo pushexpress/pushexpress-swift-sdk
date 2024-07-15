@@ -1,0 +1,2 @@
+# Use Unix line endings everywhere, on Windows too (event Notepad already support Unix line endings =)
+* text eol=lf
