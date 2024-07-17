@@ -12,6 +12,7 @@ public final class PushExpressManager: NSObject {
     internal let logger = Logger(subsystem: "com.pushexpress.sdk", category: "mainflow")
     private let pxSdkVer: String = "0.0.1"
     private let pxUrlPrefix: String = "https://core.push.express/api/r"
+    private let pxTagsMaxKeys: Int = 64
     
     internal var sdkState: PxSdkState = PxSdkState.empty
     private var updateInterval: TimeInterval = 120
@@ -29,6 +30,8 @@ public final class PushExpressManager: NSObject {
     private let preferencesPxIcIdKey: String = "px_ic_id"
     private let preferencesPxExtIdKey: String = "px_ext_id"
     
+    private var pxTags: [String: String] = [:]
+    
     public var externalId: String {
         get { return pxExtId }
         set {
@@ -44,6 +47,23 @@ public final class PushExpressManager: NSObject {
             UserDefaults.standard.setValue(newValue, forKey: preferencesPxTtTokenKey)
             pxTtToken = newValue
             self.logger.debug("Transport token was set to \(newValue)")
+        }
+    }
+    
+    public var tags: [String: String] {
+        get { return self.pxTags }
+        set {
+            if newValue.count > pxTagsMaxKeys {
+                self.logger.error("Too much tags, only first \(self.pxTagsMaxKeys) will be kept")
+                let sortedKeys = newValue.keys.sorted().prefix(pxTagsMaxKeys)
+                var truncatedMap = [String: String]()
+                for key in sortedKeys {
+                    truncatedMap[key] = newValue[key]
+                }
+                self.pxTags = truncatedMap
+            } else {
+                self.pxTags = newValue
+            }
         }
     }
     
@@ -130,10 +150,7 @@ public final class PushExpressManager: NSObject {
             throw PxError.sdkStateTransitionError("Can't deactivate: not activated")
         }
         
-        // TODO: cancel updating flow on deactivate
         // TODO: call POST /deactivate
-        // TODO: check deactivating state
-        
         UserDefaults.standard.setValue("", forKey: preferencesPxIcIdKey)
         UserDefaults.standard.setValue("", forKey: preferencesPxExtIdKey)
         self.pxIcId = ""
@@ -222,6 +239,7 @@ public final class PushExpressManager: NSObject {
             "county": getCountry(),
             "tz_sec": getTimeZoneOffsetInSeconds(),
             "tz_name": getTimeZoneName(),
+            "tags": self.pxTags,
         ]
         
         request.httpBody = try? JSONSerialization.data(withJSONObject: params, options: [])
