@@ -27,7 +27,7 @@ extension URLSession {
             do {
                 try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true, attributes: nil)
                 
-                let fileURL = tempDirectoryURL.appendingPathComponent("image.jpg")
+                let fileURL = tempDirectoryURL.appendingPathComponent("image.img")
                 try data.write(to: fileURL)
                 
                 let attachment = try UNNotificationAttachment(identifier: "image", url: fileURL, options: nil)

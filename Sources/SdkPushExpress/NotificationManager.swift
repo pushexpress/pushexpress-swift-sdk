@@ -5,14 +5,15 @@
 
 import Foundation
 import UserNotifications
+import os
 
 public class NotificationManager {
-    internal let logTag: String = "SdkPushExpress"
+    internal let logger = Logger(subsystem: "com.pushexpress.sdk", category: "bg.notification")
     
     public init() {}
     
     public func handleNotification(request: UNNotificationRequest, contentHandler: @escaping (UNNotificationContent) -> Void) {
-        print("\(self.logTag): Handling background notification")
+        self.logger.debug("Handling background notification")
         guard let content = (request.content.mutableCopy() as? UNMutableNotificationContent) else {
             return contentHandler(request.content)
         }
@@ -21,9 +22,11 @@ public class NotificationManager {
               let msgId = userInfo["px.msg_id"] as? String,
               let title = userInfo["px.title"] as? String,
               let body = userInfo["px.body"] as? String else {
+            self.logger.debug("Unknown background notification, just try to display it")
             return contentHandler(request.content)
         }
         
+        self.logger.debug("Received background PX notification")
         content.title = title
         content.body = body
         
@@ -33,7 +36,7 @@ public class NotificationManager {
            let imageUrl = URL(string: imageUrlString) {
             downloadImage(atURL: imageUrl) { attachment, error in
                 if let error = error {
-                    print("\(self.logTag): Failed to download image: \(error.localizedDescription)")
+                    self.logger.error("Failed to download image: \(error)")
                 } else if let attachment = attachment {
                     content.attachments = [attachment]
                 }
