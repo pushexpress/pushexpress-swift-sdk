@@ -5,6 +5,7 @@
 import Foundation
 import UserNotifications
 import os
+import UIKit
 
 public final class PushExpressManager: NSObject {
     public static let shared = PushExpressManager()
@@ -32,6 +33,8 @@ public final class PushExpressManager: NSObject {
     
     private var pxTags: [String: String] = [:]
     
+    public private(set) var notificationsPermissionGranted: Bool = false
+    
     public var externalId: String {
         get { return pxExtId }
         set {
@@ -46,6 +49,7 @@ public final class PushExpressManager: NSObject {
         set {
             UserDefaults.standard.setValue(newValue, forKey: preferencesPxTtTokenKey)
             pxTtToken = newValue
+            updateAppInstance()
             self.logger.debug("Transport token was set to \(newValue)")
         }
     }
@@ -82,19 +86,29 @@ public final class PushExpressManager: NSObject {
     public func initialize(appId: String, foreground: Bool = true) throws {
         try initializeIcToken(appId: appId)
         
-        if foreground {
-            UNUserNotificationCenter.current().delegate = PushExpressManager.shared
-            
-            UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
-                if let error = error {
-                    self.logger.debug("Notification request authorization failed: \(error)")
-                    // TODO: send info about failed notification request
-                    return
+        let application = UIApplication.shared
+        
+        // Check if the device supports push notifications
+        if application.isRegisteredForRemoteNotifications {
+            self.logger.debug("Notifications permission already granted, register APNS")
+            notificationsPermissionGranted = true
+            application.registerForRemoteNotifications()
+        } else {
+            let notificationSettings = UNUserNotificationCenter.current()
+            notificationSettings.requestAuthorization(options: [.alert, .badge, .sound]) { granted, error in
+                if granted {
+                    self.logger.debug("Notifications permission just granted, register APNS")
+                    self.notificationsPermissionGranted = true
+                    DispatchQueue.main.async {
+                        application.registerForRemoteNotifications()
+                    }
+                } else {
+                    self.logger.debug("Notifications permission request failed: \(error)")
+                    // TODO: send info about failed notification reques
                 }
-                // TODO: registerForRemoteNotifications()???
             }
         }
-        self.logger.debug("Initialized, notification perms requested")
+        self.logger.debug("Initialization finished")
     }
     
     private func isInitialized() -> Bool {
@@ -218,6 +232,10 @@ public final class PushExpressManager: NSObject {
     }
     
     func updateAppInstance() {
+        if (!isInitialized() || self.sdkState != PxSdkState.activated) {
+            self.logger.debug("Can't update AppInstance data, not initialized or not activated!")
+        }
+        
         let urlSuff = "/v2/apps/\(pxAppId)/instances/\(pxIcId)/info"
         guard let url = URL(string: "\(pxUrlPrefix)\(urlSuff)") else { return }
         
@@ -230,7 +248,7 @@ public final class PushExpressManager: NSObject {
         
         let params: [String: Any] = [
             "transport_type": self.pxTransportType.rawValue,
-            "transport_token": UserDefaults.standard.string(forKey: "idOfNotificationToken") ?? "",
+            "transport_token": self.transportToken,
             "platform_type": platformType,
             "platform_name": platformName,
             "agent_name": "px_swift_sdk_\(pxSdkVer)",
@@ -240,6 +258,7 @@ public final class PushExpressManager: NSObject {
             "tz_sec": getTimeZoneOffsetInSeconds(),
             "tz_name": getTimeZoneName(),
             "tags": self.pxTags,
+            // TODO: notif_perm_granted?
         ]
         
         request.httpBody = try? JSONSerialization.data(withJSONObject: params, options: [])
