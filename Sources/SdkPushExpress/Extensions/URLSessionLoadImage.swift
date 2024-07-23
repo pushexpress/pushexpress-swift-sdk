@@ -1,8 +1,3 @@
-//
-//  URLSessionLoadImage.swift
-//  
-//
-
 import Foundation
 import UserNotifications
 

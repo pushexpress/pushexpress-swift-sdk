@@ -1,7 +1,3 @@
-// The Swift Programming Language
-// https://docs.swift.org/swift-book
-
-
 import Foundation
 import UserNotifications
 import os
@@ -18,22 +14,34 @@ public final class PushExpressManager: NSObject {
     internal var sdkState: PxSdkState = PxSdkState.empty
     private var updateInterval: TimeInterval = 120
     
+    private var lastAppState: UIApplication.State = UIApplication.State.inactive
+    private var currAppState: UIApplication.State = UIApplication.State.inactive
+    
     private let pxTransportType: PxTransportType = PxTransportType.apns
     private var pxAppId: String = ""
     private var pxTtToken: String = ""
     private var pxIcToken: String = ""
     private var pxIcId: String = ""
     private var pxExtId: String = ""
+    private var pxOnscreenCount: Int = 0
+    private var pxOnscreenSec: Int = 0
+    private var pxOnscreenStartTs: Int = 0
+    private var pxOnscreenStopTs: Int = 0
     
     private let preferencesPxAppIdKey: String = "px_app_id"
     private let preferencesPxTtTokenKey: String = "px_tt_token"
     private let preferencesPxIcTokenKey: String = "px_ic_token"
     private let preferencesPxIcIdKey: String = "px_ic_id"
     private let preferencesPxExtIdKey: String = "px_ext_id"
+    private let preferencesPxOnscreenCount: String = "px_onscreen_count"
+    private let preferencesPxOnscreenSec: String = "px_onscreen_sec"
+    private let preferencesPxOnscreenStartTs: String = "px_onscreen_start_ts"
+    private let preferencesPxOnscreenStopTs: String = "px_onscreen_stop_ts"
     
     private var pxTags: [String: String] = [:]
     
     public private(set) var notificationsPermissionGranted: Bool = false
+    public var foregroundNotifications: Bool = true
     
     public var externalId: String {
         get { return pxExtId }
@@ -77,17 +85,137 @@ public final class PushExpressManager: NSObject {
         self.pxIcToken = UserDefaults.standard.string(forKey: preferencesPxIcTokenKey) ?? ""
         self.pxIcId = UserDefaults.standard.string(forKey: preferencesPxIcIdKey) ?? ""
         self.pxExtId = UserDefaults.standard.string(forKey: preferencesPxExtIdKey) ?? ""
+        self.pxOnscreenCount = max(UserDefaults.standard.integer(forKey: preferencesPxOnscreenCount) ?? 0, 0)
+        self.pxOnscreenSec = max(UserDefaults.standard.integer(forKey: preferencesPxOnscreenSec) ?? 0, 0)
+        
+        let nowTs = Int(Date().timeIntervalSince1970)
+        self.pxOnscreenStartTs = min(nowTs, max(UserDefaults.standard.integer(forKey: preferencesPxOnscreenStartTs) ?? 0, 0))
+        self.pxOnscreenStopTs = min(nowTs, max(UserDefaults.standard.integer(forKey: preferencesPxOnscreenStopTs) ?? 0, 0))
+        self.pxOnscreenStartTs = self.pxOnscreenStartTs == 0 ? nowTs : self.pxOnscreenStartTs
+        self.pxOnscreenStopTs = self.pxOnscreenStopTs == 0 ? nowTs : self.pxOnscreenStopTs
         
         if self.pxAppId != "" && self.pxIcToken != "" {
             self.sdkState = PxSdkState.initialized
         }
+        
+        super.init()
+        
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(lifecycleNotificationReceiver),
+            name: UIApplication.didBecomeActiveNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(lifecycleNotificationReceiver),
+            name: UIApplication.didEnterBackgroundNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(lifecycleNotificationReceiver),
+            name: UIApplication.willTerminateNotification,
+            object: nil
+        )
     }
     
-    public func initialize(appId: String, foreground: Bool = true) throws {
+    @objc func lifecycleNotificationReceiver(notification: NSNotification) {
+        self.logger.debug("Lifecycle notification received: \(notification.name.rawValue)")
+        self.lastAppState = self.currAppState
+        
+        if notification.name == UIApplication.didBecomeActiveNotification {
+            self.currAppState = UIApplication.State.active
+            self.sendLifecycleEvent(event: PxLifecycleEvents.onscreen)
+        }
+        else if notification.name == UIApplication.didEnterBackgroundNotification {
+            self.currAppState = UIApplication.State.background
+            self.sendLifecycleEvent(event: PxLifecycleEvents.background)
+        }
+        else if notification.name == UIApplication.willTerminateNotification {
+            self.currAppState = UIApplication.State.inactive
+            self.sendLifecycleEvent(event: PxLifecycleEvents.closed)
+        }
+        
+        if calcAndUpdateOnscreenData() {
+            updateAppInstance()
+        }
+    }
+    
+    private func calcAndUpdateOnscreenData() -> Bool {
+        var logMsg = "Trying to update onscreen data: lastAppState \(self.lastAppState.rawValue), " +
+        "currAppState \(self.currAppState.rawValue), onscreenCount \(self.pxOnscreenCount), " +
+        "onscreenSec \(self.pxOnscreenSec), onscreenStartTime \(self.pxOnscreenStartTs), " +
+        "onscreenStopTime \(self.pxOnscreenStopTs)"
+        self.logger.debug("\(logMsg)")
+        
+        var updated = false
+        if self.currAppState == UIApplication.State.active {
+            if self.lastAppState != self.currAppState {
+                self.pxOnscreenCount += 1
+                self.pxOnscreenStartTs = Int(Date().timeIntervalSince1970)
+                self.lastAppState = self.currAppState
+                updated = true
+            } else {
+                let currActiveTs = Int(Date().timeIntervalSince1970)
+                if currActiveTs > 0 && self.pxOnscreenStartTs > 0 && currActiveTs >= self.pxOnscreenStartTs {
+                    self.pxOnscreenSec += Int(currActiveTs - self.pxOnscreenStartTs)
+                    self.pxOnscreenStartTs = currActiveTs
+                    updated = true
+                } else {
+                    self.logger.error("Something wrong with lifecycle and timestamps, see logs above")
+                }
+            }
+        }
+        else if self.lastAppState == UIApplication.State.active {
+            self.pxOnscreenStopTs = Int(Date().timeIntervalSince1970)
+            if self.pxOnscreenStopTs > 0 && self.pxOnscreenStartTs > 0 && self.pxOnscreenStopTs >= self.pxOnscreenStartTs {
+                self.pxOnscreenSec += Int(self.pxOnscreenStopTs - self.pxOnscreenStartTs)
+                updated = true
+            } else {
+                self.logger.error("Something wrong with lifecycle and timestamps, see logs above")
+            }
+            self.lastAppState = self.currAppState
+        }
+        
+        if updated {
+            UserDefaults.standard.setValue(self.pxOnscreenCount, forKey: preferencesPxOnscreenCount)
+            UserDefaults.standard.setValue(self.pxOnscreenSec, forKey: preferencesPxOnscreenSec)
+            
+            logMsg = "Updated onscreen data: lastAppState \(self.lastAppState.rawValue), " +
+            "currAppState \(self.currAppState.rawValue), onscreenCount \(self.pxOnscreenCount), " +
+            "onscreenSec \(self.pxOnscreenSec), onscreenStartTime \(self.pxOnscreenStartTs), " +
+            "onscreenStopTime \(self.pxOnscreenStopTs)"
+            self.logger.debug("\(logMsg)")
+        }
+        
+        return updated
+    }
+    
+    deinit {
+        NotificationCenter.default.removeObserver(
+            self,
+            name: UIApplication.didBecomeActiveNotification,
+            object: nil
+        )
+        NotificationCenter.default.removeObserver(
+            self,
+            name: UIApplication.didEnterBackgroundNotification,
+            object: nil
+        )
+        NotificationCenter.default.removeObserver(
+            self,
+            name: UIApplication.willTerminateNotification,
+            object: nil
+        )
+    }
+    
+    public func initialize(appId: String) throws {
         try initializeIcToken(appId: appId)
         
-        let application = UIApplication.shared
+        UNUserNotificationCenter.current().delegate = PushExpressManager.shared
         
+        let application = UIApplication.shared
         // Check if the device supports push notifications
         if application.isRegisteredForRemoteNotifications {
             self.logger.debug("Notifications permission already granted, register APNS")
@@ -104,7 +232,6 @@ public final class PushExpressManager: NSObject {
                     }
                 } else {
                     self.logger.debug("Notifications permission request failed: \(error)")
-                    // TODO: send info about failed notification reques
                 }
             }
         }
@@ -231,7 +358,7 @@ public final class PushExpressManager: NSObject {
         }
     }
     
-    func updateAppInstance() {
+    private func updateAppInstance() {
         if (!isInitialized() || self.sdkState != PxSdkState.activated) {
             self.logger.debug("Can't update AppInstance data, not initialized or not activated!")
         }
@@ -257,8 +384,12 @@ public final class PushExpressManager: NSObject {
             "county": getCountry(),
             "tz_sec": getTimeZoneOffsetInSeconds(),
             "tz_name": getTimeZoneName(),
+            "onscreen_count": self.pxOnscreenCount,
+            "onscreen_sec": self.pxOnscreenSec,
             "tags": self.pxTags,
-            // TODO: notif_perm_granted?
+            "notif_perm_granted": self.notificationsPermissionGranted,
+            "onscreen_start_ts": Int(self.pxOnscreenStartTs),
+            "onscreen_stop_ts": Int(self.pxOnscreenStopTs),
         ]
         
         request.httpBody = try? JSONSerialization.data(withJSONObject: params, options: [])
@@ -290,28 +421,18 @@ public final class PushExpressManager: NSObject {
         task.resume()
     }
     
-    /*private func retryUpdateAppInstance() {
-        let initialDelay = Double.random(in: 1...5)
-        let maxDelay = 120.0
-        var delay = initialDelay
-        
-        DispatchQueue.global().asyncAfter(deadline: .now() + delay) { [weak self] in
-            self?.updateAppInstance()
-            delay = min(delay * 2, maxDelay)
-        }
-    }*/
-    
     private func schedulePeriodicUpdate() {
         if self.sdkState != PxSdkState.activated {
             self.logger.debug("Deactivated, stop periodic updates")
         }
         DispatchQueue.global().asyncAfter(deadline: .now() + updateInterval) { [weak self] in
+            self?.calcAndUpdateOnscreenData()
             self?.updateAppInstance()
             self?.schedulePeriodicUpdate()
         }
     }
     
-    public func sendNotificationEvent(msgId: String, event: PxEvents) {
+    internal func sendNotificationEvent(msgId: String, event: PxNotificationEvents) {
         let urlSuff = "/v2/apps/\(pxAppId)/instances/\(pxIcId)/events/notification"
         guard let url = URL(string: "\(pxUrlPrefix)\(urlSuff)") else { return }
         
@@ -337,7 +458,7 @@ public final class PushExpressManager: NSObject {
         task.resume()
     }
     
-    public func sendLifecycleEvent(event: PxEvents) {
+    internal func sendLifecycleEvent(event: PxLifecycleEvents) {
         let urlSuff = "/v2/apps/\(pxAppId)/instances/\(pxIcId)/events/lifecycle"
         guard let url = URL(string: "\(pxUrlPrefix)\(urlSuff)") else { return }
         
@@ -413,4 +534,3 @@ public final class PushExpressManager: NSObject {
         return (platform, majorVersion)
     }
 }
-

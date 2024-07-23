@@ -1,8 +1,3 @@
-//
-//  UNUserNotificationCenterDelegate.swift
-//
-//
-
 import UserNotifications
 
 extension PushExpressManager: UNUserNotificationCenterDelegate {
@@ -11,7 +6,12 @@ extension PushExpressManager: UNUserNotificationCenterDelegate {
         if let msgId = data["px.msg_id"] as? String,
            let title = data["px.title"] as? String,
            let body = data["px.body"] as? String {
-            self.logger.debug("Received PX notification")
+            self.logger.debug("Received PX notification: msgId \(msgId)")
+            if !self.foregroundNotifications {
+                self.logger.debug("Foreground displaying disabled, notification with msgId \(msgId) will not be shown")
+                return
+            }
+            
             let content = UNMutableNotificationContent()
             content.title = title
             content.body = body

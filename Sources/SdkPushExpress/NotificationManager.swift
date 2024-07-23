@@ -1,8 +1,3 @@
-//
-//  NotificationManager.swift
-//  
-//
-
 import Foundation
 import UserNotifications
 import os

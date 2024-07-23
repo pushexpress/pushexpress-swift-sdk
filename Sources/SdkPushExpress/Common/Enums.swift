@@ -1,8 +1,3 @@
-//
-//  File.swift
-//  
-//
-
 import Foundation
 
 public enum PxTransportType: String {
@@ -12,9 +7,15 @@ public enum PxTransportType: String {
     case apns
 }
 
-public enum PxEvents: String {
+public enum PxNotificationEvents: String {
     case clicked
     case delivered
+}
+
+public enum PxLifecycleEvents: String {
+    case onscreen
+    case background
+    case closed
 }
 
 public enum PxSdkState: String {
