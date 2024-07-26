@@ -21,10 +21,7 @@ public final class PushExpressManager: NSObject {
     private var pxAppId: String = ""
     private var pxTtToken: String = ""
     private var pxIcToken: String = ""
-    
-    // Do not store px_ic_id in local storage, because we need call activate every time app starts
     private var pxIcId: String = ""
-    
     private var pxExtId: String = ""
     private var pxOnscreenCount: Int = 0
     private var pxOnscreenSec: Int = 0
