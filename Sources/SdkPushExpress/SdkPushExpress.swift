@@ -11,17 +11,20 @@ public final class PushExpressManager: NSObject {
     private let pxUrlPrefix: String = "https://core.push.express/api/r"
     private let pxTagsMaxKeys: Int = 64
     
-    internal var sdkState: PxSdkState = PxSdkState.empty
+    internal var sdkState: PxSdkState = .empty
     private var updateInterval: TimeInterval = 120
     
     private var lastAppState: UIApplication.State = UIApplication.State.inactive
     private var currAppState: UIApplication.State = UIApplication.State.inactive
     
-    private let pxTransportType: PxTransportType = PxTransportType.apns
+    private let pxTransportType: PxTransportType = .apns
     private var pxAppId: String = ""
     private var pxTtToken: String = ""
     private var pxIcToken: String = ""
+    
+    // Do not store px_ic_id in local storage, because we need call activate every time app starts
     private var pxIcId: String = ""
+    
     private var pxExtId: String = ""
     private var pxOnscreenCount: Int = 0
     private var pxOnscreenSec: Int = 0
@@ -43,7 +46,15 @@ public final class PushExpressManager: NSObject {
     public private(set) var notificationsPermissionGranted: Bool = false
     public var foregroundNotifications: Bool = true
     
-    public var externalId: String {
+    private var appInstanceId: String {
+        get { return pxIcId }
+        set {
+            UserDefaults.standard.setValue(newValue, forKey: preferencesPxIcIdKey)
+            self.pxIcId = newValue
+        }
+    }
+    
+    public private(set) var externalId: String {
         get { return pxExtId }
         set {
             UserDefaults.standard.setValue(newValue, forKey: preferencesPxExtIdKey)
@@ -95,7 +106,7 @@ public final class PushExpressManager: NSObject {
         self.pxOnscreenStopTs = self.pxOnscreenStopTs == 0 ? nowTs : self.pxOnscreenStopTs
         
         if self.pxAppId != "" && self.pxIcToken != "" {
-            self.sdkState = PxSdkState.initialized
+            self.sdkState = .initialized
         }
         
         super.init()
@@ -126,15 +137,15 @@ public final class PushExpressManager: NSObject {
         
         if notification.name == UIApplication.didBecomeActiveNotification {
             self.currAppState = UIApplication.State.active
-            self.sendLifecycleEvent(event: PxLifecycleEvents.onscreen)
+            self.sendLifecycleEvent(event: .onscreen)
         }
         else if notification.name == UIApplication.didEnterBackgroundNotification {
             self.currAppState = UIApplication.State.background
-            self.sendLifecycleEvent(event: PxLifecycleEvents.background)
+            self.sendLifecycleEvent(event: .background)
         }
         else if notification.name == UIApplication.willTerminateNotification {
             self.currAppState = UIApplication.State.inactive
-            self.sendLifecycleEvent(event: PxLifecycleEvents.closed)
+            self.sendLifecycleEvent(event: .closed)
         }
         
         if calcAndUpdateOnscreenData() {
@@ -246,57 +257,68 @@ public final class PushExpressManager: NSObject {
         let needReinitialize = self.pxAppId != "" && appId != "" && appId != self.pxAppId
         
         if (!isInitialized() || needReinitialize) {
-            if ![PxSdkState.empty, PxSdkState.deactivated, PxSdkState.initialized].contains(self.sdkState) {
-                self.logger.debug("Can't start initialization from \(self.sdkState.rawValue) state")
+            if sdkState != .empty && sdkState != .deactivated && sdkState != .initialized {
+                self.logger.error("Can't start initialization from \(self.sdkState.rawValue) state")
                 throw PxError.sdkStateTransitionError("Can't start initialization from \(self.sdkState.rawValue) state")
             }
             
             let newIcToken = UUID().uuidString.lowercased()
             UserDefaults.standard.setValue(appId, forKey: preferencesPxAppIdKey)
             UserDefaults.standard.setValue(newIcToken, forKey: preferencesPxIcTokenKey)
-            UserDefaults.standard.setValue("", forKey: preferencesPxIcIdKey)
-            UserDefaults.standard.setValue("", forKey: preferencesPxExtIdKey)
             self.pxAppId = appId
             self.pxIcToken = newIcToken
-            self.pxIcId = ""
-            self.pxExtId = ""
+            self.appInstanceId = ""
+            self.externalId = ""
             
-            self.sdkState = PxSdkState.initialized
+            self.sdkState = .initialized
             self.logger.debug("Initialized with appId \(appId), icToken \(newIcToken), reinit \(needReinitialize)")
         } else {
+            // Do not set sdkState to .initialized here! It can be in any state, not only .empty/.deactivated
+            // Just log and return =)
             self.logger.debug("Already initialized with appId \(appId), icToken \(self.pxIcToken) and no need for reinit")
         }
     }
     
-    public func activate() throws {
-        if !self.isInitialized() {
-            self.logger.debug("Can't activate, initialize first!")
-            // throw only if not initialized, otherwise do our best silently
-            throw PxError.sdkStateTransitionError("Can't activate, initialize first!")
-        }
-        
-        if self.sdkState != PxSdkState.activated && self.sdkState != PxSdkState.activating {
-            self.sdkState = PxSdkState.activating
+    public func activate(extId: String = "", force: Bool = false) throws {
+        if self.sdkState == .initialized || self.sdkState == .deactivated {
+            self.sdkState = .activating
+            
+            if !force && self.appInstanceId != "" && self.externalId == extId {
+                self.logger.debug("No activation needed, use cached icId \(self.pxIcId) with appId \(self.pxAppId), extId \(self.pxExtId), icToken \(self.pxIcToken)")
+                
+                self.sdkState = .activated
+                self.updateAppInstance()
+                self.schedulePeriodicUpdate()
+                self.logger.debug("Update flow scheduled")
+                return
+            }
+            
+            // externalId can be set only on activating, because it's part of session key
+            self.externalId = extId
             getOrCreateAppInstance()
-        } else if self.sdkState == PxSdkState.activated {
-            self.logger.debug("Already activated with appId \(self.pxAppId), extId \(self.pxExtId), icId \(self.pxIcId)")
+        } else if self.sdkState == .activated {
+            self.logger.debug("Already activated icId \(self.pxIcId) with appId \(self.pxAppId), extId \(self.pxExtId), icToken \(self.pxIcToken)")
+        } else if self.sdkState == .activating {
+            self.logger.debug("Activating now appId \(self.pxAppId), extId \(self.pxExtId), icToken \(self.pxIcToken) ...")
         } else {
-            self.logger.debug("Activating now with appId \(self.pxAppId), extId \(self.pxExtId) ...")
+            self.logger.error("Can't start activation from \(self.sdkState.rawValue) state!")
+            throw PxError.sdkStateTransitionError("Can't start activation from \(self.sdkState.rawValue) state!")
         }
     }
     
     public func deactivate() throws {
-        if self.sdkState != PxSdkState.activated {
-            self.logger.debug("Can't deactivate: not activated")
-            throw PxError.sdkStateTransitionError("Can't deactivate: not activated")
+        if self.sdkState == .activated {
+            self.sdkState = .deactivating
+            
+            deactivateAppInstance()
+        } else if self.sdkState == .deactivated {
+            self.logger.debug("Already deactivated appId \(self.pxAppId), extId \(self.pxExtId), icToken \(self.pxIcToken)")
+        } else if self.sdkState == .deactivating {
+            self.logger.debug("Deactivating now icId \(self.pxIcId) with appId \(self.pxAppId), extId \(self.pxExtId), icToken \(self.pxIcToken) ...")
+        } else {
+            self.logger.error("Can't start deactivation from \(self.sdkState.rawValue) state!")
+            throw PxError.sdkStateTransitionError("Can't start deactivation from \(self.sdkState.rawValue) state!")
         }
-        
-        // TODO: call POST /deactivate
-        UserDefaults.standard.setValue("", forKey: preferencesPxIcIdKey)
-        UserDefaults.standard.setValue("", forKey: preferencesPxExtIdKey)
-        self.pxIcId = ""
-        self.pxExtId = ""
-        self.sdkState = PxSdkState.deactivated
     }
     
     private func getOrCreateAppInstance() {
@@ -333,12 +355,11 @@ public final class PushExpressManager: NSObject {
                 return
             }
             
-            UserDefaults.standard.setValue(id, forKey: preferencesPxIcIdKey)
-            self.pxIcId = id
+            self.appInstanceId = id
             // TODO: thread-safety?
-            self.sdkState = PxSdkState.activated
-            self.logger.debug("Activated with appId \(self.pxAppId), extId \(self.pxExtId), icId \(self.pxIcId)")
-
+            self.sdkState = .activated
+            self.logger.debug("Activated icId \(self.pxIcId) with appId \(self.pxAppId), extId \(self.pxExtId), icToken \(self.pxIcToken)")
+            
             self.updateAppInstance()
             self.schedulePeriodicUpdate()
             self.logger.debug("Update flow scheduled")
@@ -358,8 +379,62 @@ public final class PushExpressManager: NSObject {
         }
     }
     
+    private func deactivateAppInstance() {
+        let urlSuff = "/v2/apps/\(pxAppId)/instances/\(pxIcId)/deactivate"
+        guard let url = URL(string: "\(pxUrlPrefix)\(urlSuff)") else { return }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        let params: [String: String] = [
+            "ic_token": self.pxIcToken,
+            "ext_id": self.pxExtId,
+        ]
+        
+        request.httpBody = try? JSONSerialization.data(withJSONObject: params, options: [])
+        self.logger.debug("Preparing \(String(request.httpMethod ?? "")) \(urlSuff): \(params)")
+        
+        let task = URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            guard let self = self else { return }
+            
+            if error != nil {
+                self.logger.error("\(String(request.httpMethod ?? "")) \(urlSuff) failed: \(error)")
+                self.retryDeactivateAppInstance()
+                return
+            }
+            
+            guard let data = data,
+                  let json = try? JSONSerialization.jsonObject(with: data, options: []),
+                  let jsonDict = json as? [String: Any],
+                  let id = jsonDict["id"] as? String else {
+                self.logger.error("Failed to parse data from \(urlSuff): \(data?.base64EncodedString() ?? "")")
+                self.retryDeactivateAppInstance()
+                return
+            }
+
+            self.appInstanceId = ""
+            self.externalId = ""
+            self.sdkState = .deactivated
+        }
+        
+        self.logger.debug("Deactivated icId \(self.pxIcId) with appId \(self.pxAppId), extId \(self.pxExtId), icToken \(self.pxIcToken)")
+        task.resume()
+    }
+    
+    private func retryDeactivateAppInstance() {
+        let initialDelay = Double.random(in: 1...5)
+        let maxDelay = 120.0
+        var delay = initialDelay
+        
+        DispatchQueue.global().asyncAfter(deadline: .now() + delay) { [weak self] in
+            self?.deactivateAppInstance()
+            delay = min(delay * 2, maxDelay)
+        }
+    }
+    
     private func updateAppInstance() {
-        if (!isInitialized() || self.sdkState != PxSdkState.activated) {
+        if (!isInitialized() || self.sdkState != .activated) {
             self.logger.debug("Can't update AppInstance data, not initialized or not activated!")
         }
         
@@ -379,7 +454,6 @@ public final class PushExpressManager: NSObject {
             "platform_type": platformType,
             "platform_name": platformName,
             "agent_name": "px_swift_sdk_\(pxSdkVer)",
-            "ext_id": pxExtId,
             "lang": getSettedLanguage(),
             "county": getCountry(),
             "tz_sec": getTimeZoneOffsetInSeconds(),
@@ -422,8 +496,8 @@ public final class PushExpressManager: NSObject {
     }
     
     private func schedulePeriodicUpdate() {
-        if self.sdkState != PxSdkState.activated {
-            self.logger.debug("Deactivated, stop periodic updates")
+        if self.sdkState != .activated {
+            self.logger.debug("Not activated any more, stop periodic updates")
         }
         DispatchQueue.global().asyncAfter(deadline: .now() + updateInterval) { [weak self] in
             self?.calcAndUpdateOnscreenData()

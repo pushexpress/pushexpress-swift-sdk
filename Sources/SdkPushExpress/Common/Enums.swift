@@ -19,11 +19,12 @@ public enum PxLifecycleEvents: String {
 }
 
 public enum PxSdkState: String {
-    case empty       // initialize()  -> initialized
-    case initialized // activate()    -> activating -> activated
-    case activating  // automatic     -> activated
-    case activated   // deactivate()  -> deactivated             || activate() -> activated
-    case deactivated // initialize()  -> initialized [reinit]    || activate() -> activating -> activated
+    case empty        // initialize()  -> initialized
+    case initialized  // activate()    -> activating -> activated
+    case activating   // automatic     -> activated
+    case activated    // deactivate()  -> deactivating -> deactivated || activate() -> activated
+    case deactivating // automatic     -> deactivated
+    case deactivated  // initialize()  -> initialized [reinit]        || activate() -> activating -> activated
 }
 
 enum PxError: Error {
