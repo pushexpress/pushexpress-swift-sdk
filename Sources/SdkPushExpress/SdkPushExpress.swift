@@ -7,7 +7,7 @@ public final class PushExpressManager: NSObject {
     public static let shared = PushExpressManager()
     
     internal let logger = Logger(subsystem: "com.pushexpress.sdk", category: "mainflow")
-    private let pxSdkVer: String = "0.0.1"
+    private let pxSdkVer: String = "1.0.1"
     private let pxUrlPrefix: String = "https://core.push.express/api/r"
     private let pxTagsMaxKeys: Int = 64
     
@@ -434,8 +434,9 @@ public final class PushExpressManager: NSObject {
     }
     
     private func updateAppInstance() {
-        if (!isInitialized() || self.sdkState != .activated) {
-            self.logger.debug("Can't update AppInstance data, not initialized or not activated!")
+        if self.sdkState != .activated {
+            self.logger.debug("Can't update AppInstance data, not activated!")
+            return
         }
         
         let urlSuff = "/v2/apps/\(pxAppId)/instances/\(pxIcId)/info"
@@ -498,6 +499,7 @@ public final class PushExpressManager: NSObject {
     private func schedulePeriodicUpdate() {
         if self.sdkState != .activated {
             self.logger.debug("Not activated any more, stop periodic updates")
+            return
         }
         DispatchQueue.global().asyncAfter(deadline: .now() + updateInterval) { [weak self] in
             self?.calcAndUpdateOnscreenData()
@@ -507,6 +509,11 @@ public final class PushExpressManager: NSObject {
     }
     
     internal func sendNotificationEvent(msgId: String, event: PxNotificationEvents) {
+        if self.sdkState != .activated {
+            self.logger.debug("Can't send \(event.rawValue) event, not activated")
+            return
+        }
+
         let urlSuff = "/v2/apps/\(pxAppId)/instances/\(pxIcId)/events/notification"
         guard let url = URL(string: "\(pxUrlPrefix)\(urlSuff)") else { return }
         
@@ -533,6 +540,11 @@ public final class PushExpressManager: NSObject {
     }
     
     internal func sendLifecycleEvent(event: PxLifecycleEvents) {
+        if self.sdkState != .activated {
+            self.logger.debug("Can't send \(event.rawValue) event, not activated")
+            return
+        }
+
         let urlSuff = "/v2/apps/\(pxAppId)/instances/\(pxIcId)/events/lifecycle"
         guard let url = URL(string: "\(pxUrlPrefix)\(urlSuff)") else { return }
         
