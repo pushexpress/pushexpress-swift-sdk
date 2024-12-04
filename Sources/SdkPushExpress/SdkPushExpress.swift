@@ -7,7 +7,7 @@ public final class PushExpressManager: NSObject {
     public static let shared = PushExpressManager()
     
     internal let logger = Logger(subsystem: "com.pushexpress.sdk", category: "mainflow")
-    private let pxSdkVer: String = "1.0.1"
+    private let pxSdkVer: String = "1.1.0"
     private let pxUrlPrefix: String = "https://core.push.express/api/r"
     private let pxTagsMaxKeys: Int = 64
     
@@ -218,30 +218,49 @@ public final class PushExpressManager: NSObject {
         )
     }
     
-    public func initialize(appId: String) throws {
-        try initializeIcToken(appId: appId)
-        
-        UNUserNotificationCenter.current().delegate = PushExpressManager.shared
-        
+    public func requestNotificationsPermission(registerForRemoteNotifications: Bool) {
         let application = UIApplication.shared
         // Check if the device supports push notifications
         if application.isRegisteredForRemoteNotifications {
             self.logger.debug("Notifications permission already granted, register APNS")
-            notificationsPermissionGranted = true
-            application.registerForRemoteNotifications()
+            self.notificationsPermissionGranted = true
+            if registerForRemoteNotifications {
+                application.registerForRemoteNotifications()
+            }
         } else {
             let notificationSettings = UNUserNotificationCenter.current()
             notificationSettings.requestAuthorization(options: [.alert, .badge, .sound]) { granted, error in
                 if granted {
                     self.logger.debug("Notifications permission just granted, register APNS")
                     self.notificationsPermissionGranted = true
-                    DispatchQueue.main.async {
-                        application.registerForRemoteNotifications()
+                    if registerForRemoteNotifications {
+                        DispatchQueue.main.async {
+                            application.registerForRemoteNotifications()
+                        }
                     }
                 } else {
                     self.logger.debug("Notifications permission request failed: \(error)")
                 }
             }
+        }
+    }
+    
+    public func initialize(appId: String) throws {
+        try initializeIcToken(appId: appId)
+        
+        UNUserNotificationCenter.current().delegate = PushExpressManager.shared
+        
+        requestNotificationsPermission(registerForRemoteNotifications: true)
+        self.logger.debug("Initialization finished")
+    }
+    
+    public func initialize(appId: String, essentialsOnly: Bool) throws {
+        try initializeIcToken(appId: appId)
+        
+        UNUserNotificationCenter.current().delegate = PushExpressManager.shared
+        
+        if !essentialsOnly {
+            requestNotificationsPermission(registerForRemoteNotifications: true)
         }
         self.logger.debug("Initialization finished")
     }
