@@ -7,7 +7,7 @@ public final class PushExpressManager: NSObject {
     public static let shared = PushExpressManager()
     
     internal let logger = Logger(subsystem: "com.pushexpress.sdk", category: "mainflow")
-    private let pxSdkVer: String = "1.1.0"
+    private let pxSdkVer: String = "1.1.2"
     private let pxUrlPrefix: String = "https://core.push.express/api/r"
     private let pxTagsMaxKeys: Int = 64
     
