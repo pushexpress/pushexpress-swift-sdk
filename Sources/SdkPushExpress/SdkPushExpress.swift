@@ -218,7 +218,7 @@ public final class PushExpressManager: NSObject {
         )
     }
     
-    public func requestNotificationsPermission(registerForRemoteNotifications: Bool) {
+    public func requestNotificationsPermission(registerForRemoteNotifications: Bool = true) {
         let application = UIApplication.shared
         // Check if the device supports push notifications
         if application.isRegisteredForRemoteNotifications {
